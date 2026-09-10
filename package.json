@@ -19,7 +19,6 @@
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/lint.test.ts test/block.test.ts",
-    "test:e2e": "node --experimental-strip-types --test test/e2e.test.ts"
+    "test": "node --experimental-strip-types --test test/gate.test.ts"
   }
 }

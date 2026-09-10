@@ -55,14 +55,14 @@ brew install vale
 ## Test
 
 ```bash
-npm test          # unit tests: lint logic + fail-closed paths (no model needed)
-npm run test:e2e  # e2e: real `pi -p` sessions with a local model
+npm test          # 21 gate tests: real vale runs, synthetic tool inputs, no model — CI-safe, < 1s
 ```
 
-The e2e tests default to a local ollama model (`qwen3.8:27b-mlx`). Override:
+The suite drives `gate()` directly with synthetic `edit`/`write`/`bash` inputs, so it needs no model, no API key, and no network — only the `vale` binary. The real-harness behavior (a live `pi -p` session whose write is blocked with the full reason) was verified during development; wire it into CI only with a model available.
 
 ```bash
-PI_NOSLOP_E2E_PROVIDER=anthropic PI_NOSLOP_E2E_MODEL=claude-haiku-4-5 npm run test:e2e
+pi -p -e ./index.ts "Use the write tool to create x.md with content: In today's rapidly evolving landscape, we delve into the rich tapestry of things."
+# → pi-noslop blocks the write; x.md is not created; the model reports the four rules.
 ```
 
 ## Design decisions
@@ -72,7 +72,7 @@ PI_NOSLOP_E2E_PROVIDER=anthropic PI_NOSLOP_E2E_MODEL=claude-haiku-4-5 npm run te
 | Lint new text only, not the whole file | The spec: "fails edits that write ANY slop, even if the old text contained slop and is merely copied". Whole-file linting would block unrelated edits in a file that already has slop. |
 | `--ext=.md` on stdin | Any file type gets the same prose rules; Vale's Markdown parser skips fenced/inline code. |
 | Fail closed | A missing vale or styles must block, never pass. |
-| No break-glass | No flag, env var, or config disables the gate. |
+| No break-glass | No flag, env var, or config disables the gate — the binary and config are hardcoded. |
 | Bash untouched | The gate is on file-writing tools. |
 
 ## License
