@@ -19,7 +19,7 @@ import {
 } from "../src/gate.ts";
 
 const SLOP = "In today's rapidly evolving landscape, we delve into the rich tapestry of things.\n";
-const CLEAN = "The router reads the tenant's routing from the Config API.\n";
+const CLEAN = "The parser reads the schema's version from the header.\n";
 
 // --- what gets linted ---
 
