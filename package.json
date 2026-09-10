@@ -1,0 +1,25 @@
+{
+  "name": "pi-noslop",
+  "version": "0.1.0",
+  "description": "Fail-closed pi extension: blocks edit and write tool calls whose resulting text contains AI-slop prose, using the vendored vale-ai-tells ruleset. No break-glass.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "vale",
+    "ai-tells",
+    "slop",
+    "prose",
+    "lint"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/lint.test.ts test/block.test.ts",
+    "test:e2e": "node --experimental-strip-types --test test/e2e.test.ts"
+  }
+}
