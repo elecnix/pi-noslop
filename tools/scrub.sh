@@ -38,12 +38,23 @@ fail=0
 # here is a regex alternation, so an individual matched word is not masked.
 # Set SCRUB_SHOW_MATCHES=1 to see the text when running this locally.
 scan() {
-	local label="$1" caseflag="$2" pattern="$3" hits
+	local label="$1" caseflag="$2" pattern="$3" hits rc
 	hits=$(grep -rnE ${caseflag:+"$caseflag"} \
 		--exclude-dir=.git \
 		--exclude-dir=node_modules \
 		--exclude=scrub.sh \
-		-- "$pattern" . || true)
+		-- "$pattern" .)
+	rc=$?
+	# 0 is a hit, 1 is no hit, anything higher is grep itself failing — a
+	# pattern it cannot compile, most likely. Absorbing that with `|| true`
+	# would leave `hits` empty and report clean while checking nothing, which
+	# this script's own header calls worse than no scrub at all.
+	if [ "$rc" -ge 2 ]; then
+		printf 'scrub: %s could not run: grep exited %d. Fix the pattern; it checked nothing.\n\n' \
+			"$label" "$rc"
+		fail=1
+		return
+	fi
 	if [ -n "$hits" ]; then
 		if [ "${SCRUB_SHOW_MATCHES:-}" = "1" ]; then
 			printf 'scrub: %s matched:\n%s\n\n' "$label" "$hits"

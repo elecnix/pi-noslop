@@ -31,6 +31,7 @@ Two limits on that walk:
 
 - It **stops at the repository root**, so a stray config in a parent directory cannot reach into an unrelated checkout.
 - It **skips `$HOME`**. A personal `~/.vale.ini` must never decide a gate verdict — that is the hole `--no-global` closes, and reaching the same file through `--config=` would reopen it. `--no-global` is passed on every invocation.
+- It walks **real paths**. A symlinked edit path would otherwise climb the logical tree, straight past the `.git` meant to stop it and into whatever config sits above; a symlinked `$HOME`, the ordinary case in containers, would slip past the check above. Verdicts therefore name the canonical path.
 
 The resolved config is **cached per directory**, and one walk fills the cache for every directory it climbed through, so a repo is walked once rather than on every keystroke. The cache lives for the pi session: adding a `.vale.ini` to a repo the session has already touched takes effect on the next session.
 

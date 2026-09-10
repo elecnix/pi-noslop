@@ -13,15 +13,18 @@
  *   decide a gate verdict; that is the hole `--no-global` closes, and
  *   passing the same file through `--config=` would reopen it.
  *
+ * The walk runs on real paths, so a symlinked edit path or a symlinked
+ * `$HOME` cannot smuggle in a config from outside the repo.
+ *
  * The result is cached per directory, and one walk fills the cache for
  * every directory it climbed through, so a repo is walked once. The cache
  * lives as long as the pi session: adding a `.vale.ini` to a repo the
  * session has already touched takes effect on the next session.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, parse, resolve } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Absolute path to this repo's vendored vale config. */
@@ -75,6 +78,36 @@ function isRepoRoot(dir: string): boolean {
 }
 
 /**
+ * The real path, as far down as the path exists.
+ *
+ * `resolve` normalizes `.`, `..` and a trailing slash but leaves symlinks
+ * alone, and a walk up a logical path can climb straight out of the repo the
+ * file really lives in — past the `.git` that is meant to stop it, into
+ * whatever config sits above. Comparing real paths is also what keeps the
+ * `$HOME` guard honest: a symlinked home is the ordinary case on Linux and in
+ * containers, and a string compare misses it.
+ *
+ * Agents write into directories they are about to create, so the tail that
+ * does not exist yet is kept as written rather than treated as a failure.
+ */
+function realPath(path: string): string {
+	let dir = resolve(path);
+	const tail: string[] = [];
+	for (;;) {
+		try {
+			return join(realpathSync(dir), ...tail.reverse());
+		} catch {
+			const parent = dirname(dir);
+			if (parent === dir) {
+				return resolve(path);
+			}
+			tail.push(basename(dir));
+			dir = parent;
+		}
+	}
+}
+
+/**
  * Find the rule set that governs `filePath`. Relative paths resolve
  * against `cwd`, which is where pi is running.
  */
@@ -87,13 +120,14 @@ export function resolveValeConfig(filePath: string, cwd: string = process.cwd())
  * tool call carries no path, where the directory to judge is pi's cwd
  * itself rather than its parent.
  */
-export function resolveValeConfigForDir(start: string): ResolvedConfig {
+export function resolveValeConfigForDir(where: string): ResolvedConfig {
+	const start = realPath(where);
 	const cached = cache.get(start);
 	if (cached) {
 		return cached;
 	}
 
-	const home = homedir();
+	const home = realPath(homedir());
 	const filesystemRoot = parse(start).root;
 	const climbed: string[] = [];
 	let found: ResolvedConfig | undefined;

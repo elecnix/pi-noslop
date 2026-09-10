@@ -6,7 +6,7 @@
 
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
@@ -29,9 +29,15 @@ afterEach(() => {
 	}
 });
 
-/** A throwaway directory that looks like a git repo. */
+/**
+ * A throwaway directory that looks like a git repo.
+ *
+ * `realpathSync` because the resolver reports real paths and the OS temp dir
+ * is itself a symlink on macOS (`/var` -> `/private/var`). Without it every
+ * path assertion below compares two spellings of the same directory.
+ */
 function makeRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "noslop-"));
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "noslop-")));
 	made.push(dir);
 	mkdirSync(join(dir, ".git"));
 	return dir;
@@ -81,7 +87,7 @@ test("a repo with no rules falls back to the vendored default", () => {
 });
 
 test("the walk stops at the repo root and ignores a .vale.ini above it", () => {
-	const outer = mkdtempSync(join(tmpdir(), "noslop-outer-"));
+	const outer = realpathSync(mkdtempSync(join(tmpdir(), "noslop-outer-")));
 	made.push(outer);
 	writeFileSync(join(outer, ".vale.ini"), "StylesPath = styles\n");
 	const repo = join(outer, "inner");

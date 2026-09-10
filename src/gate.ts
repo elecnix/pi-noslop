@@ -125,6 +125,13 @@ export function runVale(
 			}
 			resolve(stdout);
 		});
+		// Vale exits before draining stdin whenever it cannot load the config,
+		// which is exactly what an unsynced repo does. Writing a payload past
+		// the pipe buffer then raises EPIPE, and an unhandled `error` event on
+		// stdin would kill the host process instead of producing a verdict —
+		// neither allowed nor blocked. The `close` and `error` handlers above
+		// already reach the right answer, so this one only has to not throw.
+		child.stdin.on("error", () => {});
 		child.stdin.write(text);
 		child.stdin.end();
 	});
