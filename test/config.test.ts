@@ -253,3 +253,18 @@ test("a call with no path is judged by the rules governing pi's cwd", () => {
 	// The file-path form of the same directory must not climb one too far.
 	assert.equal(resolveValeConfig(join(repo, "any.md")).configPath, config.configPath);
 });
+
+test("a new file in a directory that does not exist yet still resolves", async () => {
+	// Agents write into directories they are about to create. The walk has to
+	// climb past the missing directory rather than give up on it.
+	const repo = makeRepo();
+	withRuleBanning(repo, "foo");
+	const config = resolveValeConfig(join(repo, "not", "yet", "there.md"));
+	assert.equal(config.configPath, join(repo, ".vale.ini"));
+	const decision = await gate("write", {
+		path: join(repo, "not", "yet", "there.md"),
+		content: HOUSE_SLOP,
+	});
+	assert.ok(decision, "expected the repo's rule to block");
+	assert.match(decision.reason, /house\.NoToken/);
+});
