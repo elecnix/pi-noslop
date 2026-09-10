@@ -1,0 +1,28 @@
+name: review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  # One review per pull request at a time; superseded runs may be cancelled
+  # freely because publishing is idempotent.
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Fork pull requests receive a read-only github.token, so posting the
+    # review would fail on them.
+    if: github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: elecnix/cite@v0.6.0
+        with:
+          model_id: deepseek/deepseek-v4-flash-0731
+          model_base_url: https://openrouter.ai/api/v1
+          model_api_key: ${{ secrets.MODEL_API_KEY }}
