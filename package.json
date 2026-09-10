@@ -19,6 +19,6 @@
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/gate.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts"
   }
 }
