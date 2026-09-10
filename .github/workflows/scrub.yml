@@ -1,0 +1,27 @@
+name: scrub
+
+# This repo is public and its fixtures are agent-written. The scrub keeps
+# private vocabulary out of them. See tools/scrub.sh for how the pattern is
+# split between a committed baseline and a repository secret.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: scrub-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scrub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - env:
+          SCRUB_PATTERN: ${{ secrets.SCRUB_PATTERN }}
+          SCRUB_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: ./tools/scrub.sh
