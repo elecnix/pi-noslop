@@ -133,6 +133,8 @@ It scans with two patterns. The **baseline** is committed and names nothing priv
 
 The secret is **required**. A scrub that passes because its pattern is empty reports green while checking nothing. Fork pull requests are the one exception, since GitHub withholds secrets from them by design and a fork contributor has no access to the vocabulary anyway; there, only the baseline runs.
 
+A finding is reported as `file:line` with the matching text withheld. Printing it would write the leaked sentence into a public build log, which is the outcome the scrub exists to prevent — and GitHub masks a secret's literal value, not the individual words inside a regex alternation. Run `SCRUB_SHOW_MATCHES=1 ./tools/scrub.sh` locally to see the text.
+
 ## License
 
 MIT. The vendored ruleset is [vale-ai-tells](https://github.com/tbhb/vale-ai-tells) (MIT, © Tony Burns), vendored at v1.34.0 — see `vale/LICENSE.vale-ai-tells`.

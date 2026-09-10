@@ -21,6 +21,8 @@
 #
 # grep exits 1 when it finds nothing. That is the outcome this script wants,
 # so every call absorbs the status and the decision is made on the output.
+#
+# Findings are reported as `file:line` without the matching text. See scan().
 
 set -uo pipefail
 
@@ -29,6 +31,12 @@ fail=0
 # scan <label> <case-flag> <pattern>. The case flag is `-i` or empty:
 # ticket references are uppercase by convention and match case-sensitively,
 # so a lowercase build tag such as a model name does not trip them.
+#
+# Only `file:line` is printed. Printing the matching text would write the
+# leaked sentence into a public build log, which is the outcome this script
+# exists to prevent. GitHub masks a secret's literal value, but the secret
+# here is a regex alternation, so an individual matched word is not masked.
+# Set SCRUB_SHOW_MATCHES=1 to see the text when running this locally.
 scan() {
 	local label="$1" caseflag="$2" pattern="$3" hits
 	hits=$(grep -rnE ${caseflag:+"$caseflag"} \
@@ -37,7 +45,12 @@ scan() {
 		--exclude=scrub.sh \
 		-- "$pattern" . || true)
 	if [ -n "$hits" ]; then
-		printf 'scrub: %s matched:\n%s\n\n' "$label" "$hits"
+		if [ "${SCRUB_SHOW_MATCHES:-}" = "1" ]; then
+			printf 'scrub: %s matched:\n%s\n\n' "$label" "$hits"
+		else
+			printf 'scrub: %s matched at:\n%s\n\n' \
+				"$label" "$(printf '%s\n' "$hits" | cut -d: -f1,2 | sed 's/^/  /')"
+		fi
 		fail=1
 	fi
 }
