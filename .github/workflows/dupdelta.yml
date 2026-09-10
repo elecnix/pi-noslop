@@ -1,0 +1,19 @@
+name: duplication
+
+on: pull_request
+
+concurrency:
+  group: dupdelta-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dupdelta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0        # the merge-base has to be reachable
+      - uses: elecnix/dupdelta@v0.2.0
