@@ -1,14 +1,15 @@
 /**
  * pi-noslop — fail-closed AI-slop gate for pi's edit and write tools.
  *
- * Every `edit` and `write` tool call is linted with the vendored
- * vale-ai-tells ruleset (vale/styles/ai-tells) BEFORE the tool executes.
+ * Every `edit` and `write` tool call is linted BEFORE the tool executes,
+ * with the rules of the repo the file lands in when that repo declares
+ * any, and with the vendored vale-ai-tells ruleset otherwise.
  * If the text the agent is about to write contains any slop, the tool call
  * is blocked with a loud, precise reason: the rule that broke, the vale
  * guidance, and the exact vale command to run for the full violation list.
  *
- * All logic lives in src/gate.ts (pure, unit-testable in milliseconds).
- * This file is the thin pi wiring.
+ * All logic lives in src/gate.ts and src/config.ts (pure, unit-testable
+ * in milliseconds). This file is the thin pi wiring.
  *
  * Design decisions (all load-bearing):
  *
@@ -22,12 +23,18 @@
  *    README. Fenced code blocks and inline code spans are skipped by
  *    Vale's Markdown parser, so code identifiers that match slop tokens do
  *    not false-positive.
- * 3. Fail closed. If vale is missing, the vendored styles are missing, or
- *    vale errors out, the tool call is BLOCKED — a broken gate must never
- *    silently let slop through.
- * 4. No break-glass. There is no flag, env var, or config to disable the
+ * 3. The edited repo's rules win. Resolution walks up from the edited file
+ *    to the nearest `.vale.ini`, stopping at the repository root, and
+ *    falls back to the vendored pack only when the repo declares nothing.
+ *    `$HOME` is skipped, so a personal `~/.vale.ini` cannot decide a
+ *    verdict. The resolved config is cached per repo.
+ * 4. Fail closed. If vale is missing, the styles are missing, or vale
+ *    errors out, the tool call is BLOCKED — a broken gate must never
+ *    silently let slop through. A repo whose declared rules cannot load
+ *    blocks too; it never downgrades to the vendored pack.
+ * 5. No break-glass. There is no flag, env var, or config to disable the
  *    gate. The only way to write slop is to not write slop.
- * 5. Bash is untouched. Only `edit` and `write` are gated.
+ * 6. Bash is untouched. Only `edit` and `write` are gated.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
