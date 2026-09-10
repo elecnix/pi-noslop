@@ -20,4 +20,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # the gate shells out to the vale binary; the vendored styles are
+      # checked in but the binary is not, so CI installs it from the
+      # errata-ai/vale release that matches the version this suite is
+      # calibrated against
+      - run: |
+          curl -fsSL https://github.com/errata-ai/vale/releases/download/v3.20.0/vale_3.20.0_Linux_64-bit.tar.gz | tar -xz -C /usr/local/bin vale
+          vale --version
       - run: npm test
