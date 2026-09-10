@@ -14,7 +14,9 @@
  *   passing the same file through `--config=` would reopen it.
  *
  * The result is cached per directory, and one walk fills the cache for
- * every directory it climbed through, so a repo is walked once.
+ * every directory it climbed through, so a repo is walked once. The cache
+ * lives as long as the pi session: adding a `.vale.ini` to a repo the
+ * session has already touched takes effect on the next session.
  */
 
 import { existsSync } from "node:fs";

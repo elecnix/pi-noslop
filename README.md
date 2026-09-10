@@ -32,7 +32,7 @@ Two limits on that walk:
 - It **stops at the repository root**, so a stray config in a parent directory cannot reach into an unrelated checkout.
 - It **skips `$HOME`**. A personal `~/.vale.ini` must never decide a gate verdict — that is the hole `--no-global` closes, and reaching the same file through `--config=` would reopen it. `--no-global` is passed on every invocation.
 
-The resolved config is **cached per directory**, and one walk fills the cache for every directory it climbed through, so a repo is walked once rather than on every keystroke.
+The resolved config is **cached per directory**, and one walk fills the cache for every directory it climbed through, so a repo is walked once rather than on every keystroke. The cache lives for the pi session: adding a `.vale.ini` to a repo the session has already touched takes effect on the next session.
 
 Every verdict names the rule set that produced it:
 
