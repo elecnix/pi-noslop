@@ -17,11 +17,12 @@
  *    and is merely copied" — so each `edits[i].newText` is linted on its
  *    own. Pre-existing slop elsewhere in the file is out of scope and must
  *    not block unrelated edits.
- * 2. Any file type. Vale parses the text as Markdown via `--ext=.md` on
- *    stdin, so a `.go` file or a `Makefile` gets the same prose rules as a
- *    README. Fenced code blocks and inline code spans are skipped by
- *    Vale's Markdown parser, so code identifiers that match slop tokens do
- *    not false-positive.
+ * 2. Any file type. Vale's `--ext` is derived from the target path
+ *    (src/gate.ts `formatForPath`), so `.go` is parsed as Go (code, with
+ *    comments still linted) instead of as Markdown prose. Unmapped
+ *    extensions — and extensionless, dotfile, `<unknown>`, or absent
+ *    paths — fall back to `--ext=.md` (whole-text prose linting), which
+ *    fails closed rather than silently skipping an unknown format.
  * 3. Fail closed. If vale is missing, the vendored styles are missing, or
  *    vale errors out, the tool call is BLOCKED — a broken gate must never
  *    silently let slop through.
