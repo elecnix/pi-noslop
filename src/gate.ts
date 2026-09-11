@@ -5,11 +5,16 @@
  * `edit` gates each `edits[i].newText` (the text being written — so slop
  * that is merely copied from the old text is still caught); `write` gates
  * the full `content`. Bash never reaches this module.
+ *
+ * Vale's parse format (`--ext`) is derived from the tool call's target
+ * `path`: a write to `main.go` is linted as Go (comments only), a write
+ * to `README.md` as Markdown. Unrecognized, extensionless, and dotfile
+ * paths fall back to `md`, so prose rules still fire — fail-closed.
  */
 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 
 /** Absolute path to this repo's vendored vale config. */
 export const VALE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "vale");
@@ -42,14 +47,52 @@ export interface LintResult {
 	error?: string;
 }
 
+/**
+ * Extensions vale can parse, mapped to the `--ext` value vale accepts
+ * (with its leading dot). Markdown variants and the other built-in readers
+ * (txt, rst, adoc, html) lint the whole text as prose; `go` makes vale
+ * parse with tree-sitter and lint comments only.
+ */
+const EXT_MAP: Record<string, string> = {
+	md: ".md",
+	markdown: ".md",
+	mdown: ".md",
+	mkd: ".md",
+	txt: ".txt",
+	rst: ".rst",
+	adoc: ".adoc",
+	asciidoc: ".adoc",
+	html: ".html",
+	go: ".go",
+};
+
+/**
+ * The `--ext` value for a target path. The extension is lowercased first
+ * (`--ext=.GO` is not recognized by vale and would fall back to plain
+ * text). Extensionless paths, dotfiles (`.gitignore` — `extname` returns
+ * the empty string), a trailing `.` ("file." — `extname` returns "."),
+ * and an absent path all fall back to `.md`: prose rules fire on the whole
+ * text, which fails closed (slop in any file still blocks) rather than
+ * silently passing an unmapped format. The value keeps the leading dot:
+ * vale recognizes `--ext=.md` but not `--ext=md`, which falls back to
+ * plain text and would skip fenced-code handling.
+ */
+export function formatForPath(path: string | undefined): string {
+	if (!path || path === "<unknown>") {
+		return ".md";
+	}
+	const ext = extname(path).slice(1).toLowerCase();
+	return EXT_MAP[ext] ?? ".md";
+}
+
 /** The exact args the extension passes to vale. Exported for tests. */
-export function valeArgs(): string[] {
+export function valeArgs(path?: string): string[] {
 	return [
 		"--no-global",
 		`--config=${VALE_INI}`,
 		"--output=JSON",
 		"--no-wrap",
-		"--ext=.md",
+		`--ext=${formatForPath(path)}`,
 	];
 }
 
@@ -57,16 +100,19 @@ export function valeArgs(): string[] {
 export interface GateOptions {
 	/** Vale binary override (tests inject a name that cannot exist). */
 	valeBin?: string;
+	/** Target path, used only to derive vale's `--ext` parse format. */
+	path?: string;
 }
 
 /**
  * Spawn vale, feed `text` on stdin, resolve with its JSON stdout.
  * Vale exits 0 (clean) or 1 (violations found); both produce valid JSON.
- * Any other exit, a spawn error, or a timeout rejects.
+ * Any other exit, a spawn error, or a timeout rejects. `path` only picks
+ * the parse format (`--ext`); the text itself always travels on stdin.
  */
-export function runVale(text: string, valeBin: string = VALE_BIN): Promise<string> {
+export function runVale(text: string, valeBin: string = VALE_BIN, path?: string): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(valeBin, valeArgs(), { stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(valeBin, valeArgs(path), { stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
 		const timer = setTimeout(() => {
@@ -107,7 +153,7 @@ export function parseValeOutput(stdout: string): ValeViolation[] {
 /** Run vale over `text`; never throws — vale failures come back as `error`. */
 export async function lintText(text: string, opts?: GateOptions): Promise<LintResult> {
 	try {
-		const stdout = await runVale(text, opts?.valeBin);
+		const stdout = await runVale(text, opts?.valeBin, opts?.path);
 		return { violations: parseValeOutput(stdout) };
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
@@ -116,11 +162,6 @@ export async function lintText(text: string, opts?: GateOptions): Promise<LintRe
 			error: `vale could not run: ${detail}. Check that vale is installed and the vendored styles are present at ${VALE_DIR}.`,
 		};
 	}
-}
-
-export interface GateOptions {
-	/** Vale binary override (tests inject a name that cannot exist). */
-	valeBin?: string;
 }
 
 export interface GateInput {
@@ -149,12 +190,12 @@ export function textsToLint(toolName: string, input: GateInput): string[] {
 
 /** The vale command that reproduces the full violation list for a file. */
 export function valeCommandForFile(path: string): string {
-	return `vale --no-global --config=${VALE_INI} --output=JSON --no-wrap --ext=.md ${path}`;
+	return `vale --no-global --config=${VALE_INI} --output=JSON --no-wrap --ext=${formatForPath(path)} ${path}`;
 }
 
 /** The vale command that lints text piped to stdin (for new-file writes). */
-export function valeCommandForStdin(): string {
-	return `vale --no-global --config=${VALE_INI} --output=JSON --no-wrap --ext=.md`;
+export function valeCommandForStdin(path?: string): string {
+	return `vale --no-global --config=${VALE_INI} --output=JSON --no-wrap --ext=${formatForPath(path)}`;
 }
 
 /** Build the block reason: rule, vale guidance, match, and how to run vale. */
@@ -179,7 +220,7 @@ export function buildReason(
 	if (toolName === "edit") {
 		lines.push(`  ${valeCommandForFile(path)}`);
 	} else {
-		lines.push(`  ${valeCommandForStdin()}  # pipe the content to stdin`);
+		lines.push(`  ${valeCommandForStdin(path)}  # pipe the content to stdin`);
 	}
 	lines.push("", "Fix the flagged prose and re-issue the edit. There is no bypass.");
 	return lines.join("\n");
@@ -210,7 +251,7 @@ export async function gate(
 	const path = input.path ?? "<unknown>";
 	const allViolations: ValeViolation[] = [];
 	for (const text of texts) {
-		const result = await lintText(text, opts);
+		const result = await lintText(text, { ...opts, path: opts?.path ?? input.path });
 		if (result.error) {
 			return {
 				block: true,
