@@ -92,20 +92,34 @@ test("gate blocks a write of new slop content", async () => {
 	assert.match(decision.reason, /ai-tells\.OverusedVocabulary/);
 });
 
-test("gate blocks a write to any file type (.go comment slop)", async () => {
+test("gate passes a .go write whose code has a clause-final semicolon", async () => {
+	// The issue's repro: prose rules must not fire on Go code. Under the old
+	// hardcoded --ext=.md, vale reads this as prose and flags the `; err` as
+	// ai-tells.SemicolonUsage; as Go, tree-sitter lints comments only.
 	const decision = await gate("write", {
 		path: "main.go",
-		content: "package main\n\n// In today's rapidly evolving world, we delve.\nfunc main() {}\n",
+		content: "package main\n\nfunc main() {\n\tif err := run(); err != nil {\n\t\treturn err\n\t}\n}\n",
 	});
-	assert.ok(decision, "expected a block for a .go file's prose");
+	assert.equal(decision, undefined, "Go code must not be linted as Markdown prose");
 });
 
-test("gate blocks a write to an extensionless file (Makefile-style)", async () => {
+test("gate blocks a .go write whose comment carries slop at the right line", async () => {
+	const decision = await gate("write", {
+		path: "main.go",
+		content: "package main\n\n// In today's rapidly evolving landscape, we delve into the rich tapestry of things.\nfunc main() {}\n",
+	});
+	assert.ok(decision, "Go comment prose must still be blocked");
+	assert.match(decision.reason, /ai-tells\.OpeningCliches/);
+	assert.match(decision.reason, /line 3/);
+});
+
+test("gate blocks a write to an extensionless path (NOTES-style)", async () => {
 	const decision = await gate("write", {
 		path: "NOTES",
-		content: "In today's rapidly evolving world, we delve.\n",
+		content: "In today's rapidly evolving landscape, we delve into the rich tapestry of things.\n",
 	});
-	assert.ok(decision, "expected a block for an extensionless file");
+	assert.ok(decision, "extensionless targets must not silently pass");
+	assert.match(decision.reason, /ai-tells\.OpeningCliches/);
 });
 
 test("fenced code blocks in the written text are skipped", async () => {

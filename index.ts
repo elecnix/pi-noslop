@@ -1,5 +1,5 @@
 /**
- * pi-noslop — fail-closed AI-slop gate for pi's edit and write tools.
+ * pi-noslop: fail-closed AI-slop gate for pi's edit and write tools.
  *
  * Every `edit` and `write` tool call is linted BEFORE the tool executes,
  * with the rules of the repo the file lands in when that repo declares
@@ -15,23 +15,24 @@
  *
  * 1. Lint the NEW text only, never the whole resulting file. The spec is
  *    "fails edits that write ANY slop, even if the old text contained slop
- *    and is merely copied" — so each `edits[i].newText` is linted on its
+ *    and is merely copied", so each `edits[i].newText` is linted on its
  *    own. Pre-existing slop elsewhere in the file is out of scope and must
  *    not block unrelated edits.
- * 2. Any file type. Vale parses the text as Markdown via `--ext=.md` on
- *    stdin, so a `.go` file or a `Makefile` gets the same prose rules as a
- *    README. Fenced code blocks and inline code spans are skipped by
- *    Vale's Markdown parser, so code identifiers that match slop tokens do
- *    not false-positive.
+ * 2. Any file type. Vale's `--ext` is derived from the target path
+ *    (src/gate.ts `formatForPath`), so `.go` is parsed as Go (code, with
+ *    comments still linted) instead of as Markdown prose. Unmapped
+ *    extensions, and extensionless, dotfile, `<unknown>`, or absent
+ *    paths, fall back to `--ext=.md` (whole-text prose linting), which
+ *    fails closed rather than silently skipping an unknown format.
  * 3. The edited repo's rules win. Resolution walks up from the edited file
  *    to the nearest `.vale.ini`, stopping at the repository root, and
  *    falls back to the vendored pack only when the repo declares nothing.
  *    `$HOME` is skipped, so a personal `~/.vale.ini` cannot decide a
  *    verdict. The resolved config is cached per repo.
  * 4. Fail closed. If vale is missing, the styles are missing, or vale
- *    errors out, the tool call is BLOCKED — a broken gate must never
- *    silently let slop through. A repo whose declared rules cannot load
- *    blocks too; it never downgrades to the vendored pack.
+ *    errors out, the tool call is BLOCKED. A broken gate must never
+ *    silently accept slop. A repo whose declared rules cannot load
+ *    blocks too, and it never downgrades to the vendored pack.
  * 5. No break-glass. There is no flag, env var, or config to disable the
  *    gate. The only way to write slop is to not write slop.
  * 6. Bash is untouched. Only `edit` and `write` are gated.

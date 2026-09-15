@@ -8,9 +8,15 @@
  *
  * The rule set comes from the repo being edited when that repo declares
  * one, and from the vendored default pack otherwise. See src/config.ts.
+ *
+ * Vale's parse format (`--ext`) is derived from the tool call's target
+ * `path`: a write to `main.go` is linted as Go (comments only), a write
+ * to `README.md` as Markdown. Unrecognized, extensionless, and dotfile
+ * paths fall back to `md`, so prose rules still fire, which fails closed.
  */
 
 import { spawn } from "node:child_process";
+import { extname, join } from "node:path";
 import {
 	configLabel,
 	resolveValeConfig,
@@ -51,14 +57,52 @@ export interface LintResult {
 	error?: string;
 }
 
+/**
+ * Extensions vale can parse, mapped to the `--ext` value vale accepts
+ * (with its leading dot). Markdown variants and the other built-in readers
+ * (txt, rst, adoc, html) lint the whole text as prose; `go` makes vale
+ * parse with tree-sitter and lint comments only.
+ */
+const EXT_MAP: Record<string, string> = {
+	md: ".md",
+	markdown: ".md",
+	mdown: ".md",
+	mkd: ".md",
+	txt: ".txt",
+	rst: ".rst",
+	adoc: ".adoc",
+	asciidoc: ".adoc",
+	html: ".html",
+	go: ".go",
+};
+
+/**
+ * The `--ext` value for a target path. The extension is lowercased first
+ * (`--ext=.GO` is not recognized by vale and would fall back to plain
+ * text). Extensionless paths, dotfiles (`.gitignore` — `extname` returns
+ * the empty string), a trailing `.` ("file." — `extname` returns "."),
+ * and an absent path all fall back to `.md`: prose rules fire on the whole
+ * text, which fails closed (slop in any file still blocks) rather than
+ * silently passing an unmapped format. The value keeps the leading dot:
+ * vale recognizes `--ext=.md` but not `--ext=md`, which falls back to
+ * plain text and would skip fenced-code handling.
+ */
+export function formatForPath(path: string | undefined): string {
+	if (!path || path === "<unknown>") {
+		return ".md";
+	}
+	const ext = extname(path).slice(1).toLowerCase();
+	return EXT_MAP[ext] ?? ".md";
+}
+
 /** The exact args the extension passes to vale. Exported for tests. */
-export function valeArgs(configPath: string = VALE_INI): string[] {
+export function valeArgs(configPath: string = VALE_INI, path?: string): string[] {
 	return [
 		"--no-global",
 		`--config=${configPath}`,
 		"--output=JSON",
 		"--no-wrap",
-		"--ext=.md",
+		`--ext=${formatForPath(path)}`,
 	];
 }
 
@@ -70,6 +114,8 @@ export interface GateOptions {
 	config?: ResolvedConfig;
 	/** Directory relative paths resolve against. Defaults to pi's cwd. */
 	cwd?: string;
+	/** Target path, used only to derive vale's `--ext` parse format. */
+	path?: string;
 }
 
 /**
@@ -88,23 +134,26 @@ export function describeValeExit(code: number | null, stderr: string): string {
 			return `${parsed.Code ?? "error"}${where}: ${text}`;
 		}
 	} catch {
-		// Not vale's JSON envelope — fall through to the raw output.
+		// Not vale's JSON envelope. Fall through to the raw output.
 	}
 	return `exited with code ${code}: ${trimmed}`;
+
 }
 
 /**
  * Spawn vale, feed `text` on stdin, resolve with its JSON stdout.
  * Vale exits 0 (clean) or 1 (violations found); both produce valid JSON.
- * Any other exit, a spawn error, or a timeout rejects.
+ * Any other exit, a spawn error, or a timeout rejects. `path` only picks
+ * the parse format (`--ext`); the text itself always travels on stdin.
  */
 export function runVale(
 	text: string,
 	configPath: string = VALE_INI,
 	valeBin: string = VALE_BIN,
+	path?: string,
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(valeBin, valeArgs(configPath), { stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(valeBin, valeArgs(configPath, path), { stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
 		const timer = setTimeout(() => {
@@ -177,7 +226,7 @@ export function describeFailure(config: ResolvedConfig, detail: string): string 
 export async function lintText(text: string, opts?: GateOptions): Promise<LintResult> {
 	const config = opts?.config ?? VENDORED_CONFIG;
 	try {
-		const stdout = await runVale(text, config.configPath, opts?.valeBin);
+		const stdout = await runVale(text, config.configPath, opts?.valeBin, opts?.path);
 		return { violations: parseValeOutput(stdout) };
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
@@ -211,12 +260,13 @@ export function textsToLint(toolName: string, input: GateInput): string[] {
 
 /** The vale command that reproduces the full violation list for a file. */
 export function valeCommandForFile(path: string, configPath: string = VALE_INI): string {
-	return `vale ${valeArgs(configPath).join(" ")} ${path}`;
+	return `vale ${valeArgs(configPath, path).join(" ")} ${path}`;
 }
 
 /** The vale command that lints text piped to stdin (for new-file writes). */
-export function valeCommandForStdin(configPath: string = VALE_INI): string {
-	return `vale ${valeArgs(configPath).join(" ")}`;
+export function valeCommandForStdin(path?: string, configPath: string = VALE_INI): string {
+	return `vale ${valeArgs(configPath, path).join(" ")}`;
+
 }
 
 /** Build the block reason: rule set, rule, vale guidance, match, command. */
@@ -243,7 +293,7 @@ export function buildReason(
 	if (toolName === "edit") {
 		lines.push(`  ${valeCommandForFile(path, config.configPath)}`);
 	} else {
-		lines.push(`  ${valeCommandForStdin(config.configPath)}  # pipe the content to stdin`);
+		lines.push(`  ${valeCommandForStdin(path, config.configPath)}  # pipe the content to stdin`);
 	}
 	lines.push("", "Fix the flagged prose and re-issue the edit. There is no bypass.");
 	return lines.join("\n");
@@ -275,7 +325,7 @@ export async function gate(
 
 	const allViolations: ValeViolation[] = [];
 	for (const text of texts) {
-		const result = await lintText(text, { ...opts, config });
+		const result = await lintText(text, { ...opts, config, path: opts?.path ?? input.path });
 		if (result.error) {
 			return {
 				block: true,
