@@ -18,12 +18,12 @@
  *    and is merely copied", so each `edits[i].newText` is linted on its
  *    own. Pre-existing slop elsewhere in the file is out of scope and must
  *    not block unrelated edits.
- * 2. Any file type. Vale's `--ext` is derived from the target path
- *    (src/gate.ts `formatForPath`), so `.go` is parsed as Go (code, with
- *    comments still linted) instead of as Markdown prose. Unmapped
- *    extensions, and extensionless, dotfile, `<unknown>`, or absent
- *    paths, fall back to `--ext=.md` (whole-text prose linting), which
- *    fails closed rather than silently skipping an unknown format.
+ * 2. Only what vale can parse. Vale's `--ext` is derived from the target
+ *    path (src/gate.ts `lintKindForPath`), so `.go` is parsed as Go
+ *    (comments linted, code not) and `README.md` as Markdown. A target
+ *    vale has no parser for, such as shell, yaml, unknown extensions,
+ *    and extensionless paths, is skipped: the gate does not run vale on
+ *    it at all (issue #6).
  * 3. The edited repo's rules win. Resolution walks up from the edited file
  *    to the nearest `.vale.ini`, stopping at the repository root, and
  *    falls back to the vendored pack only when the repo declares nothing.

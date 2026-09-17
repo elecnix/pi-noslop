@@ -57,53 +57,143 @@ export interface LintResult {
 	error?: string;
 }
 
-/**
- * Extensions vale can parse, mapped to the `--ext` value vale accepts
- * (with its leading dot). Markdown variants and the other built-in readers
- * (txt, rst, adoc, html) lint the whole text as prose; `go` makes vale
- * parse with tree-sitter and lint comments only.
+/** Extensions vale 3.20 parses with a tree-sitter grammar (its "code"
+ * kind): the file's comments are linted and its code is not. Vale
+ * normalizes each alias family to one grammar (cp onto cpp, sass onto
+ * c), so every alias is listed here explicitly.
  */
-const EXT_MAP: Record<string, string> = {
-	md: ".md",
-	markdown: ".md",
-	mdown: ".md",
-	mkd: ".md",
-	txt: ".txt",
-	rst: ".rst",
-	adoc: ".adoc",
-	asciidoc: ".adoc",
-	html: ".html",
-	go: ".go",
+const CODE_EXT: Record<string, true> = {
+	// Python is vale's [rc]?py[3w]? alias family.
+	py: true, rpy: true, cpy: true, py3: true, pyw: true, cpy3: true, rpy3: true, rpyw: true, cpyw: true,
+	// Clojure.
+	clj: true, cljs: true, cljc: true, cljd: true,
+	// C and C++.
+	c: true, cc: true, cpp: true, cp: true, cxx: true, "c++": true, h: true, hpp: true, "h++": true,
+	// C# (vale merges it onto the C grammar).
+	cs: true, csx: true,
+	// Elixir.
+	ex: true, exs: true,
+	go: true,
+	// Haskell.
+	hs: true,
+	// Java.
+	java: true, bsh: true,
+	// Julia.
+	jl: true,
+	// JavaScript.
+	js: true, jsx: true,
+	// Lua.
+	lua: true,
+	// PHP.
+	php: true,
+	// Perl (vale merges it onto the R grammar).
+	pl: true, pm: true, pod: true,
+	// Protobuf.
+	proto: true,
+	// PowerShell.
+	ps1: true, psm1: true, psd1: true,
+	// QML.
+	qml: true,
+	// R.
+	r: true,
+	// Ruby.
+	rb: true,
+	// Rust.
+	rs: true,
+	// Sass and LESS (vale merges them onto the C grammar).
+	sass: true, scss: true, less: true,
+	// Scala.
+	scala: true, sbt: true,
+	// Swift.
+	swift: true,
+	// TypeScript.
+	ts: true, tsx: true,
+	// CSS.
+	css: true,
 };
 
 /**
- * The `--ext` value for a target path. The extension is lowercased first
- * (`--ext=.GO` is not recognized by vale and would fall back to plain
- * text). Extensionless paths, dotfiles (`.gitignore` — `extname` returns
- * the empty string), a trailing `.` ("file." — `extname` returns "."),
- * and an absent path all fall back to `.md`: prose rules fire on the whole
- * text, which fails closed (slop in any file still blocks) rather than
- * silently passing an unmapped format. The value keeps the leading dot:
- * vale recognizes `--ext=.md` but not `--ext=md`, which falls back to
- * plain text and would skip fenced-code handling.
+ * Extensions vale 3.20 reads natively as prose documents (its "markup"
+ * and "text" kinds). The whole text is the prose, so whole-text linting
+ * is the gate doing its job rather than a fallback. Only the readers
+ * vale runs on its own are listed. The markup formats that need an
+ * external converter (rst, adoc, dita, xml, typ) are skipped instead:
+ * vale errors on them without the converter, so mapping them made every
+ * write to them fail closed.
  */
-export function formatForPath(path: string | undefined): string {
+const PROSE_EXT: Record<string, true> = {
+	// Markdown family.
+	md: true, mdown: true, markdown: true, markdn: true, rmd: true,
+	// MDX, MyST, Quarto, and Qt documentation.
+	mdx: true, myst: true, qmd: true, qdoc: true, qdocinc: true,
+	// Emacs Org.
+	org: true,
+	// Plain text.
+	txt: true,
+	// HTML.
+	html: true, htm: true, shtml: true, xhtml: true,
+};
+
+export type LintKind = "code" | "prose";
+
+/**
+ * Whether the gate lints a target path, and as what. `undefined` means
+ * the target is skipped: the gate does not run vale on it, whatever its
+ * content. The skip set is every target vale has no usable parser for:
+ *
+ * - extensionless, dotfile, trailing-dot, and absent paths;
+ * - languages with no grammar at all, such as shell and terraform;
+ * - vale's "data" kinds (yaml, yml, json, toml). Vale reads them back
+ *   as plain text, so `key:` structure trips prose rules while their
+ *   real prose is no easier to isolate than a code file's;
+ * - the markup formats vale cannot read without an external converter
+ *   it will not fetch (rst, adoc, dita, xml, typ). Mapping these to
+ *   their own formats fails closed on every write to them.
+ *
+ * Issue #6 recorded the decision: for these targets the gate skips the
+ * file. Slop in them passes silently. That is the accepted weakening of
+ * the fail-closed promise, traded for zero false positives.
+ */
+export function lintKindForPath(path: string | undefined): LintKind | undefined {
 	if (!path || path === "<unknown>") {
-		return ".md";
+		return undefined;
 	}
 	const ext = extname(path).slice(1).toLowerCase();
-	return EXT_MAP[ext] ?? ".md";
+	if (CODE_EXT[ext]) {
+		return "code";
+	}
+	if (PROSE_EXT[ext]) {
+		return "prose";
+	}
+	return undefined;
+}
+
+/**
+ * The `--ext` value the gate passes to vale for a target path, or
+ * `undefined` for a path the gate skips. The extension is lowercased
+ * first because vale does not accept `--ext=.GO`. The value keeps its
+ * leading dot: vale accepts `--ext=.md` and not `--ext=md`.
+ */
+export function formatForPath(path: string | undefined): string | undefined {
+	if (lintKindForPath(path) === undefined) {
+		return undefined;
+	}
+	return "." + extname(path).slice(1).toLowerCase();
 }
 
 /** The exact args the extension passes to vale. Exported for tests. */
 export function valeArgs(configPath: string = VALE_INI, path?: string): string[] {
-	return [
+	const args = [
 		"--no-global",
 		`--config=${configPath}`,
 		"--output=JSON",
 		"--no-wrap",
-		`--ext=${formatForPath(path)}`,
 	];
+	const ext = formatForPath(path);
+	if (ext) {
+		args.push(`--ext=${ext}`);
+	}
+	return args;
 }
 
 /** Options for injecting test doubles. The gate itself has no off switch. */
@@ -316,7 +406,14 @@ export async function gate(
 		return undefined;
 	}
 
-	const path = input.path ?? "<unknown>";
+	const path = opts?.path ?? input.path;
+	const displayPath = input.path ?? "<unknown>";
+	// Issue #6: a target vale has no usable parser for is skipped, so the
+	// gate does not run vale on it at all. Linting it whole-file as prose
+	// is where the .sh and .yml false positives came from.
+	if (lintKindForPath(path) === undefined) {
+		return undefined;
+	}
 	const cwd = opts?.cwd ?? process.cwd();
 	// A call with no path is judged by the rules governing pi's own cwd.
 	const config =
@@ -325,7 +422,7 @@ export async function gate(
 
 	const allViolations: ValeViolation[] = [];
 	for (const text of texts) {
-		const result = await lintText(text, { ...opts, config, path: opts?.path ?? input.path });
+		const result = await lintText(text, { ...opts, config, path });
 		if (result.error) {
 			return {
 				block: true,
@@ -335,7 +432,7 @@ export async function gate(
 		allViolations.push(...result.violations);
 	}
 	if (allViolations.length > 0) {
-		return { block: true, reason: buildReason(allViolations, path, toolName, config) };
+		return { block: true, reason: buildReason(allViolations, displayPath, toolName, config) };
 	}
 	return undefined;
 }
