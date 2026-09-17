@@ -16,9 +16,25 @@ Every `edit` and `write` tool call is intercepted before execution:
 
 1. The **new text** is extracted: each `edits[i].newText` for edits, `content` for writes.
 2. The **rule set is resolved** from the path being written (see below).
-3. The text is piped to `vale`, whose `--ext` parse format is derived from the target path: a write to `main.go` is parsed as Go (comments linted), a write to `README.md` as Markdown. Unmapped extensions, extensionless paths, and dotfiles fall back to `.md`, so prose rules still apply. Fenced code blocks and inline code spans are skipped by Vale's Markdown parser, so code identifiers that match slop tokens don't false-positive.
+3. The text is piped to `vale`, whose `--ext` parse format is derived from the target path: a write to `main.go` is parsed as Go, so its comments are linted and its code is not; a write to `README.md` is parsed as Markdown. A target vale has no parser for is skipped: the gate does not run vale on it at all. See "What the gate skips". Fenced code blocks and inline code spans are skipped by Vale's Markdown parser, so prose documents don't false-positive on code identifiers.
 4. Any violation and the tool call is **blocked**, with a reason that specifies the rule set, the rule, the vale guidance, and the exact vale command to reproduce the full list.
 5. If vale is missing, the styles are missing, or vale errors, the call is **blocked anyway** (fail-closed). A broken gate never silently passes slop.
+
+### What the gate skips
+
+The parse format comes from the target path's extension. Vale 3.20 has a grammar or a reader for a fixed set of extensions; everything else is a third bucket. The gate behaves per bucket:
+
+| Bucket | Examples | Behavior |
+|---|---|---|
+| Code grammars | `.go .py .js .ts .css .rb .rs` and 30+ more | Linted as code. Comments are prose, code is not. |
+| Prose documents | `.md .markdown .txt .html .org` and the other native readers | Linted in full. The document is the prose. |
+| Everything else | `.sh .yml .yaml .json .toml`, no extension, unknown extensions | **Skipped**. The gate does not run vale. |
+
+Issue #6 recorded the decision for the third bucket: skip the file. The old behavior linted those targets whole-file as Markdown, which is where the false positives came from. A shell `echo "In today's rapidly evolving world"` or a yaml `key:` line made the prose rules fire on code.
+
+Skipping weakens the fail-closed promise: slop in a skipped file passes without a verdict. That trade was accepted so the gate stops blocking code. Bash is still the place slop can always hide, and it stays untouched.
+
+Three formats need a note of their own. Vale lists `rst`, `adoc`, `xml`, and `typ` as prose formats, but it reads them through external converters (`rst2html`, `asciidoctor`, XSLT, `typst2vast`). Without the converter, linting those files fails with a vale runtime error, so the gate blocked every write to them, fail-closed on a whole format rather than on slop. They are skipped too.
 
 ### Which rules apply
 
@@ -68,6 +84,7 @@ runs before every edit stays off the network.
 - `edit`: each `newText`, individually. If the old text contained slop and the edit merely copies it, the copy is still blocked. Pre-existing slop elsewhere in the file does not block unrelated edits.
 - `write`: the full `content`.
 - `bash`: never gated. The gate is on the file-writing tools, not the shell.
+- Targets vale has no parser for: skipped (issue #6), whatever their content.
 
 ### The block reason
 
@@ -121,7 +138,7 @@ pi -p -e ./index.ts "Use the write tool to create x.md with content: In today's 
 | The walk stops at the repo root, and skips `$HOME` | A config outside the repo, or one in a developer's home directory, would make the verdict depend on the machine. |
 | Block, don't fetch, when the repo's rules are missing | A hook that runs before every edit stays off the network. `vale sync` is a setup step. |
 | Block, don't fall back, when the repo's rules can't load | A deleted styles directory would otherwise swap in a weaker rule set and the edit would look approved. |
-| `--ext` derived from the target path | A `.go` file is parsed as Go, not as Markdown prose, and its comments are still linted. Unmapped formats fall back to `.md`, which fails closed rather than silently skipping an unknown format. |
+| `--ext` derived from the target path | A `.go` file is parsed as Go, not as Markdown prose, and its comments are still linted. A target vale has no parser for is skipped (issue #6): failing closed on a whole format trains authors to route around the gate. |
 | Fail closed | A missing vale or styles must block, never pass. |
 | No break-glass | No flag, env var, or config disables the gate. The binary is fixed at `vale` on `PATH`; the rule set is resolved from the tree, never from an environment variable a shell could set. |
 | Bash untouched | The gate is on file-writing tools. |
