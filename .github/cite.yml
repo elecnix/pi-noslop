@@ -1,0 +1,9 @@
+roles:
+  review:
+    # Cite derives the review deadline from the output cap when this is
+    # unset, floored at 15 minutes. One reviewer file on a past run outran
+    # that derived deadline and came back COULD_NOT_EVALUATE, which fails
+    # the whole run. An explicit timeout overrides the derivation, so the
+    # number below is the whole contract: a hung call is still cut off, and
+    # a slow but correct one now has room to finish.
+    timeout: 25m

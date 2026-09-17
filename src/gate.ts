@@ -6,27 +6,37 @@
  * that is merely copied from the old text is still caught); `write` gates
  * the full `content`. Bash never reaches this module.
  *
+ * The rule set comes from the repo being edited when that repo declares
+ * one, and from the vendored default pack otherwise. See src/config.ts.
+ *
  * Vale's parse format (`--ext`) is derived from the tool call's target
  * `path`: a write to `main.go` is linted as Go (comments only), a write
  * to `README.md` as Markdown. Unrecognized, extensionless, and dotfile
- * paths fall back to `md`, so prose rules still fire — fail-closed.
+ * paths fall back to `md`, so prose rules still fire, which fails closed.
  */
 
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, extname, join } from "node:path";
+import { extname, join } from "node:path";
+import {
+	configLabel,
+	resolveValeConfig,
+	resolveValeConfigForDir,
+	VALE_DIR,
+	VALE_INI,
+	VENDORED_CONFIG,
+	type ResolvedConfig,
+} from "./config.ts";
 
-/** Absolute path to this repo's vendored vale config. */
-export const VALE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "vale");
+export { VALE_DIR, VALE_INI, VENDORED_CONFIG, resolveValeConfig, resolveValeConfigForDir, configLabel };
+export type { ResolvedConfig };
 
 /**
- * The config is always the vendored one; the binary is always `vale` on
- * PATH. Neither is configurable at runtime — an overridable binary would
- * be a break-glass (a fake `vale` that always exits 0 would pass slop).
- * The only injection point is the `opts` parameter, used by tests.
+ * The binary is always `vale` on PATH. It is not configurable at runtime —
+ * an overridable binary would be a break-glass, since a fake `vale` that
+ * always exits 0 would pass slop. The only injection point is the `opts`
+ * parameter, used by tests.
  */
 export const VALE_BIN = "vale";
-export const VALE_INI = join(VALE_DIR, ".vale.ini");
 
 /** Cap on how many violations are listed in a block reason. */
 export const MAX_REPORTED = 20;
@@ -86,10 +96,10 @@ export function formatForPath(path: string | undefined): string {
 }
 
 /** The exact args the extension passes to vale. Exported for tests. */
-export function valeArgs(path?: string): string[] {
+export function valeArgs(configPath: string = VALE_INI, path?: string): string[] {
 	return [
 		"--no-global",
-		`--config=${VALE_INI}`,
+		`--config=${configPath}`,
 		"--output=JSON",
 		"--no-wrap",
 		`--ext=${formatForPath(path)}`,
@@ -100,8 +110,34 @@ export function valeArgs(path?: string): string[] {
 export interface GateOptions {
 	/** Vale binary override (tests inject a name that cannot exist). */
 	valeBin?: string;
+	/** Rule set to use. Resolved from the edited path when absent. */
+	config?: ResolvedConfig;
+	/** Directory relative paths resolve against. Defaults to pi's cwd. */
+	cwd?: string;
 	/** Target path, used only to derive vale's `--ext` parse format. */
 	path?: string;
+}
+
+/**
+ * Vale reports a config failure as a JSON envelope on stderr and exits 2.
+ * Turn that into one line that names the code and the actual problem.
+ */
+export function describeValeExit(code: number | null, stderr: string): string {
+	const trimmed = stderr.trim();
+	try {
+		const parsed = JSON.parse(trimmed) as { Text?: string; Code?: string; Path?: string };
+		if (parsed && typeof parsed.Text === "string") {
+			const where = parsed.Path ? ` in ${parsed.Path}` : "";
+			const text = parsed.Text.replace(/\s*Execution stopped with code \d+\.\s*$/, "")
+				.replace(/\s+/g, " ")
+				.trim();
+			return `${parsed.Code ?? "error"}${where}: ${text}`;
+		}
+	} catch {
+		// Not vale's JSON envelope. Fall through to the raw output.
+	}
+	return `exited with code ${code}: ${trimmed}`;
+
 }
 
 /**
@@ -110,9 +146,14 @@ export interface GateOptions {
  * Any other exit, a spawn error, or a timeout rejects. `path` only picks
  * the parse format (`--ext`); the text itself always travels on stdin.
  */
-export function runVale(text: string, valeBin: string = VALE_BIN, path?: string): Promise<string> {
+export function runVale(
+	text: string,
+	configPath: string = VALE_INI,
+	valeBin: string = VALE_BIN,
+	path?: string,
+): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(valeBin, valeArgs(path), { stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(valeBin, valeArgs(configPath, path), { stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
 		const timer = setTimeout(() => {
@@ -128,11 +169,18 @@ export function runVale(text: string, valeBin: string = VALE_BIN, path?: string)
 		child.on("close", (code) => {
 			clearTimeout(timer);
 			if (code !== 0 && code !== 1) {
-				reject(new Error(`vale exited with code ${code}: ${stderr.trim()}`));
+				reject(new Error(describeValeExit(code, stderr)));
 				return;
 			}
 			resolve(stdout);
 		});
+		// Vale exits before draining stdin whenever it cannot load the config,
+		// which is exactly what an unsynced repo does. Writing a payload past
+		// the pipe buffer then raises EPIPE, and an unhandled `error` event on
+		// stdin would kill the host process instead of producing a verdict —
+		// neither allowed nor blocked. The `close` and `error` handlers above
+		// already reach the right answer, so this one only has to not throw.
+		child.stdin.on("error", () => {});
 		child.stdin.write(text);
 		child.stdin.end();
 	});
@@ -150,17 +198,39 @@ export function parseValeOutput(stdout: string): ValeViolation[] {
 	return violations;
 }
 
+/**
+ * Why the gate could not reach a verdict, and what to do about it.
+ *
+ * A repo that declares its own rules never falls back to the vendored
+ * pack. Falling back would let a deleted styles directory quietly swap in
+ * a weaker rule set, and the edit would look approved.
+ */
+export function describeFailure(config: ResolvedConfig, detail: string): string {
+	const lines = [
+		`vale could not run: ${detail}`,
+		`Rules: ${configLabel(config)}`,
+	];
+	if (config.source === "project") {
+		lines.push(
+			`This repo declares its own rules, so pi-noslop blocks here instead of falling back to its vendored pack.`,
+			`If the rules are pinned with a \`Packages =\` line they have to be fetched once: cd ${config.root} && vale sync.`,
+			`pi-noslop never fetches them for you — a hook that runs before every edit stays off the network.`,
+		);
+	} else {
+		lines.push(`Check that vale is installed and the vendored styles are present at ${VALE_DIR}.`);
+	}
+	return lines.join(" ");
+}
+
 /** Run vale over `text`; never throws — vale failures come back as `error`. */
 export async function lintText(text: string, opts?: GateOptions): Promise<LintResult> {
+	const config = opts?.config ?? VENDORED_CONFIG;
 	try {
-		const stdout = await runVale(text, opts?.valeBin, opts?.path);
+		const stdout = await runVale(text, config.configPath, opts?.valeBin, opts?.path);
 		return { violations: parseValeOutput(stdout) };
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
-		return {
-			violations: [],
-			error: `vale could not run: ${detail}. Check that vale is installed and the vendored styles are present at ${VALE_DIR}.`,
-		};
+		return { violations: [], error: describeFailure(config, detail) };
 	}
 }
 
@@ -189,26 +259,29 @@ export function textsToLint(toolName: string, input: GateInput): string[] {
 }
 
 /** The vale command that reproduces the full violation list for a file. */
-export function valeCommandForFile(path: string): string {
-	return `vale --no-global --config=${VALE_INI} --output=JSON --no-wrap --ext=${formatForPath(path)} ${path}`;
+export function valeCommandForFile(path: string, configPath: string = VALE_INI): string {
+	return `vale ${valeArgs(configPath, path).join(" ")} ${path}`;
 }
 
 /** The vale command that lints text piped to stdin (for new-file writes). */
-export function valeCommandForStdin(path?: string): string {
-	return `vale --no-global --config=${VALE_INI} --output=JSON --no-wrap --ext=${formatForPath(path)}`;
+export function valeCommandForStdin(path?: string, configPath: string = VALE_INI): string {
+	return `vale ${valeArgs(configPath, path).join(" ")}`;
+
 }
 
-/** Build the block reason: rule, vale guidance, match, and how to run vale. */
+/** Build the block reason: rule set, rule, vale guidance, match, command. */
 export function buildReason(
 	violations: ValeViolation[],
 	path: string,
 	toolName: string,
+	config: ResolvedConfig = VENDORED_CONFIG,
 ): string {
 	const shown = violations.slice(0, MAX_REPORTED);
 	const lines = [
 		"pi-noslop: blocked — the text you are about to write contains AI-slop prose.",
 		"",
 		`File: ${path}`,
+		`Rules: ${configLabel(config)}`,
 		`Violations: ${violations.length}`,
 		"",
 		...shown.map((v) => `- ${v.Check}: ${v.Message} (match: "${v.Match}", line ${v.Line})`),
@@ -218,17 +291,12 @@ export function buildReason(
 	}
 	lines.push("", "To see every violation at once, run:");
 	if (toolName === "edit") {
-		lines.push(`  ${valeCommandForFile(path)}`);
+		lines.push(`  ${valeCommandForFile(path, config.configPath)}`);
 	} else {
-		lines.push(`  ${valeCommandForStdin(path)}  # pipe the content to stdin`);
+		lines.push(`  ${valeCommandForStdin(path, config.configPath)}  # pipe the content to stdin`);
 	}
 	lines.push("", "Fix the flagged prose and re-issue the edit. There is no bypass.");
 	return lines.join("\n");
-}
-
-export interface GateContext {
-	/** pi's working directory — unused by the gate itself, kept for parity. */
-	cwd?: string;
 }
 
 /**
@@ -239,7 +307,7 @@ export async function gate(
 	toolName: string,
 	input: GateInput,
 	opts?: GateOptions,
-): Promise<{ block: boolean; reason: string } | undefined> {
+): Promise<GateResult | undefined> {
 	if (toolName !== "edit" && toolName !== "write") {
 		return undefined;
 	}
@@ -249,9 +317,15 @@ export async function gate(
 	}
 
 	const path = input.path ?? "<unknown>";
+	const cwd = opts?.cwd ?? process.cwd();
+	// A call with no path is judged by the rules governing pi's own cwd.
+	const config =
+		opts?.config ??
+		(input.path ? resolveValeConfig(input.path, cwd) : resolveValeConfigForDir(cwd));
+
 	const allViolations: ValeViolation[] = [];
 	for (const text of texts) {
-		const result = await lintText(text, { ...opts, path: opts?.path ?? input.path });
+		const result = await lintText(text, { ...opts, config, path: opts?.path ?? input.path });
 		if (result.error) {
 			return {
 				block: true,
@@ -261,7 +335,7 @@ export async function gate(
 		allViolations.push(...result.violations);
 	}
 	if (allViolations.length > 0) {
-		return { block: true, reason: buildReason(allViolations, path, toolName) };
+		return { block: true, reason: buildReason(allViolations, path, toolName, config) };
 	}
 	return undefined;
 }
