@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Review this pull request with Cite
-        uses: elecnix/cite@1c0537ba7f8df4dc5db0651f609f6b8834167150  # v0.11.2
+        uses: elecnix/cite@f5707676437aacf2d3566d0e831c5c558717f994 # v0.15.0
         with:
           # Ollama Cloud is the default provider. Set the CITE_PROVIDER
           # repository variable to "openrouter" to switch this repository
